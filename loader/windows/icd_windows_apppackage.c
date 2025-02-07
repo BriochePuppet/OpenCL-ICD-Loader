@@ -39,7 +39,7 @@ bool khrIcdOsVendorsEnumerateAppPackage(void)
     WCHAR *buffer = NULL;
     PWSTR *packages = NULL;
 
-    HMODULE h = LoadLibraryA("kernel32.dll");
+    HMODULE h = LoadLibraryW(L"kernel32.dll");
     if (h == NULL)
         return ret;
 
@@ -110,10 +110,7 @@ bool khrIcdOsVendorsEnumerateAppPackage(void)
     wcscpy_s(dllPath, MAX_PATH, path);
     wcscat_s(dllPath, MAX_PATH, L"\\" PLATFORM_PATH L"\\OpenCLOn12.dll");
 
-    char narrowDllPath[MAX_PATH];
-    WideCharToMultiByte(CP_UTF8, 0, dllPath, -1, narrowDllPath, MAX_PATH, NULL, NULL);
-
-    ret = adapterAdd(narrowDllPath, ZeroLuid);
+    ret = adapterAdd(dllPath, ZeroLuid);
 
 cleanup:
     FreeLibrary(h);

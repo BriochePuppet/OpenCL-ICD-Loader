@@ -36,10 +36,10 @@ extern "C" {
 #endif
 extern const LUID ZeroLuid;
 
-BOOL adapterAdd(const char* szName, LUID luid);
+BOOL adapterAdd(const WCHAR* szName, LUID luid);
 
 // Do not free the memory returned by this function.
-const char* getOpenCLRegKeyName(void);
+const WCHAR* getOpenCLRegKeyName(void);
 
 #ifdef __cplusplus
 }

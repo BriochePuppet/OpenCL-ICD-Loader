@@ -1,0 +1,48 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="build-windows">
+      <UniqueIdentifier>{bc1ba872-634d-4222-979f-ee1158403d3c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="source">
+      <UniqueIdentifier>{a697f372-3410-4960-9c7b-c7ff04b1c92e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="source\loader">
+      <UniqueIdentifier>{9ade37d8-a5f6-483e-a61e-2fc18b555f3b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="source\loader\windows">
+      <UniqueIdentifier>{1e8f1af9-8b97-40b8-a0cf-feb374bc20fc}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\loader\windows\icd_windows_hkr.c">
+      <Filter>source\loader\windows</Filter>
+    </ClCompile>
+    <ClCompile Include="..\loader\windows\icd_windows_apppackage.c">
+      <Filter>source\loader\windows</Filter>
+    </ClCompile>
+    <ClCompile Include="..\loader\windows\icd_windows_dxgk.c">
+      <Filter>source\loader\windows</Filter>
+    </ClCompile>
+    <ClCompile Include="..\loader\windows\icd_windows.c">
+      <Filter>source\loader\windows</Filter>
+    </ClCompile>
+    <ClCompile Include="..\loader\icd.c">
+      <Filter>source\loader</Filter>
+    </ClCompile>
+    <ClCompile Include="..\loader\icd_dispatch.c">
+      <Filter>source\loader</Filter>
+    </ClCompile>
+    <ClCompile Include="..\loader\icd_dispatch_generated.c">
+      <Filter>source\loader</Filter>
+    </ClCompile>
+    <ClCompile Include="..\loader\windows\icd_windows_envvars.c">
+      <Filter>source\loader\windows</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\loader\windows\OpenCL.def">
+      <Filter>build-windows</Filter>
+    </None>
+  </ItemGroup>
+</Project>

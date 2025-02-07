@@ -35,7 +35,7 @@ bool khrIcdOsVendorsEnumerateDXGK(void)
     int result = 0;
 
     // Get handle to GDI Runtime
-    HMODULE h = LoadLibraryA("gdi32.dll");
+    HMODULE h = LoadLibraryW(L"gdi32.dll");
     if (h == NULL)
         return ret;
 
@@ -87,8 +87,7 @@ bool khrIcdOsVendorsEnumerateDXGK(void)
             KHR_ICD_TRACE("D3DKMTEnumAdapters2 status != SUCCESS\n");
             goto out;
         }
-        const char* cszOpenCLRegKeyName = getOpenCLRegKeyName();
-        const int szOpenCLRegKeyName = (int)(strlen(cszOpenCLRegKeyName) + 1)*sizeof(cszOpenCLRegKeyName[0]);
+        const WCHAR* cszOpenCLRegKeyName = getOpenCLRegKeyName();
         for (UINT AdapterIndex = 0; AdapterIndex < EnumAdapters.adapter_count; AdapterIndex++)
         {
             LoaderQueryRegistryInfo queryArgs = {0};
@@ -97,18 +96,7 @@ bool khrIcdOsVendorsEnumerateDXGK(void)
             queryArgs.query_type = LOADER_QUERY_REGISTRY_ADAPTER_KEY;
             queryArgs.query_flags.translate_path = TRUE;
             queryArgs.value_type = REG_SZ;
-            result = MultiByteToWideChar(
-                CP_UTF8,
-                0,
-                cszOpenCLRegKeyName,
-                szOpenCLRegKeyName,
-                queryArgs.value_name,
-                ARRAYSIZE(queryArgs.value_name));
-            if (!result)
-            {
-                KHR_ICD_TRACE("MultiByteToWideChar status != SUCCESS\n");
-                continue;
-            }
+            wcsncpy(queryArgs.value_name, cszOpenCLRegKeyName, ARRAYSIZE(queryArgs.value_name));
             LoaderQueryAdapterInfo queryAdapterInfo = {0};
             queryAdapterInfo.handle = EnumAdapters.adapters[AdapterIndex].handle;
             queryAdapterInfo.type = LOADER_QUERY_TYPE_REGISTRY;
@@ -145,24 +133,7 @@ bool khrIcdOsVendorsEnumerateDXGK(void)
             }
             if (NT_SUCCESS(status) && pQueryArgs->status == LOADER_QUERY_REGISTRY_STATUS_SUCCESS)
             {
-                char cszLibraryName[MAX_PATH];
-                result = WideCharToMultiByte(
-                    CP_UTF8,
-                    0,
-                    pQueryArgs->output_string,
-                    -1,
-                    cszLibraryName,
-                    MAX_PATH,
-                    NULL,
-                    NULL);
-                if (!result)
-                {
-                    KHR_ICD_TRACE("WideCharToMultiByte status != SUCCESS\n");
-                }
-                else
-                {
-                    ret |= adapterAdd(cszLibraryName, EnumAdapters.adapters[AdapterIndex].luid);
-                }
+                ret |= adapterAdd(pQueryArgs->output_string, EnumAdapters.adapters[AdapterIndex].luid);
             }
             else if (status == (NTSTATUS)STATUS_INVALID_PARAMETER)
             {

@@ -45,14 +45,14 @@ typedef enum
         mem = NULL;                 \
     } while (0)
 
-static const char OPENCL_REG_SUB_KEY[] = "OpenCLDriverName";
+static const WCHAR OPENCL_REG_SUB_KEY[] = L"OpenCLDriverName";
 
 #ifndef _WIN64
-static const char OPENCL_REG_SUB_KEY_WOW[] = "OpenCLDriverNameWow";
+static const WCHAR OPENCL_REG_SUB_KEY_WOW[] = L"OpenCLDriverNameWow";
 #endif
 
 // Do not free the memory returned by this function.
-const char* getOpenCLRegKeyName(void)
+const WCHAR* getOpenCLRegKeyName(void)
 {
 #ifdef _WIN64
     return OPENCL_REG_SUB_KEY;
@@ -76,7 +76,7 @@ static bool ReadOpenCLKey(DEVINST dnDevNode)
     CONFIGRET ret;
     bool bRet = false;
     DWORD dwLibraryNameType = 0;
-    char *cszOclPath = NULL;
+    WCHAR *cszOclPath = NULL;
     DWORD dwOclPathSize = 0;
     LSTATUS result;
 
@@ -95,7 +95,7 @@ static bool ReadOpenCLKey(DEVINST dnDevNode)
     }
     else
     {
-        result = RegQueryValueExA(
+        result = RegQueryValueExW(
             hkey,
             getOpenCLRegKeyName(),
             NULL,
@@ -116,7 +116,7 @@ static bool ReadOpenCLKey(DEVINST dnDevNode)
             goto out;
         }
 
-        result = RegQueryValueExA(
+        result = RegQueryValueExW(
             hkey,
             getOpenCLRegKeyName(),
             NULL,

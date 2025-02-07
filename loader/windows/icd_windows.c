@@ -19,6 +19,8 @@
 #include <initguid.h>
 
 #include "icd.h"
+#include "icd_dispatch.h"
+#include <CL/cl_layer.h>
 #include "icd_windows.h"
 #include "icd_windows_hkr.h"
 #include "icd_windows_dxgk.h"
@@ -35,7 +37,7 @@ static INIT_ONCE initialized = INIT_ONCE_STATIC_INIT;
 
 typedef struct WinAdapter
 {
-    char * szName;
+    WCHAR * szName;
     LUID luid;
 } WinAdapter;
 
@@ -45,7 +47,7 @@ static WinAdapter* pWinAdapterBegin = NULL;
 static WinAdapter* pWinAdapterEnd = NULL;
 static WinAdapter* pWinAdapterCapacity = NULL;
 
-BOOL adapterAdd(const char* szName, LUID luid)
+BOOL adapterAdd(const WCHAR* szName, LUID luid)
 {
     BOOL result = TRUE;
     if (pWinAdapterEnd == pWinAdapterCapacity)
@@ -78,7 +80,7 @@ BOOL adapterAdd(const char* szName, LUID luid)
     }
     if (pWinAdapterEnd != pWinAdapterCapacity)
     {
-        size_t nameLen = (strlen(szName) + 1)*sizeof(szName[0]);
+        size_t nameLen = (wcslen(szName) + 1)*sizeof(szName[0]);
         pWinAdapterEnd->szName = malloc(nameLen);
         if (!pWinAdapterEnd->szName)
             result = FALSE;
@@ -101,7 +103,7 @@ void adapterFree(WinAdapter *pWinAdapter)
 #if defined(CL_ENABLE_LAYERS)
 typedef struct WinLayer
 {
-    char * szName;
+    WCHAR * szName;
     DWORD priority;
 } WinLayer;
 
@@ -115,7 +117,7 @@ static int __cdecl compareLayer(const void *a, const void *b)
            ((WinLayer *)a)->priority > ((WinLayer *)b)->priority ? 1 : 0;
 }
 
-static BOOL layerAdd(const char* szName, DWORD priority)
+static BOOL layerAdd(const WCHAR* szName, DWORD priority)
 {
     BOOL result = TRUE;
     if (pWinLayerEnd == pWinLayerCapacity)
@@ -151,7 +153,7 @@ static BOOL layerAdd(const char* szName, DWORD priority)
     }
     if (pWinLayerEnd != pWinLayerCapacity)
     {
-        size_t nameLen = (strlen(szName) + 1)*sizeof(szName[0]);
+        size_t nameLen = (wcslen(szName) + 1)*sizeof(szName[0]);
         pWinLayerEnd->szName = malloc(nameLen);
         if (!pWinLayerEnd->szName)
         {
@@ -175,6 +177,12 @@ void layerFree(WinLayer *pWinLayer)
 }
 #endif // defined(CL_ENABLE_LAYERS)
 
+// add a vendor's implementation to the list of libraries
+void khrIcdVendorAdd(const WCHAR *libraryName);
+
+// add a layer to the layer chain
+void khrIcdLayerAdd(const WCHAR *libraryName);
+
 /*
  *
  * Vendor enumeration functions
@@ -191,7 +199,7 @@ BOOL CALLBACK khrIcdOsVendorsEnumerate(PINIT_ONCE InitOnce, PVOID Parameter, PVO
 
     LONG result;
     BOOL status = FALSE, currentStatus = FALSE;
-    const char* platformsName = "SOFTWARE\\Khronos\\OpenCL\\Vendors";
+    const WCHAR* platformsName = L"SOFTWARE\\Khronos\\OpenCL\\Vendors";
     HKEY platformsKey = NULL;
     DWORD dwIndex;
 
@@ -219,8 +227,8 @@ BOOL CALLBACK khrIcdOsVendorsEnumerate(PINIT_ONCE InitOnce, PVOID Parameter, PVO
         KHR_ICD_TRACE("Failed to enumerate App package entry, continuing\n");
     }
 
-    KHR_ICD_TRACE("Opening key HKLM\\%s...\n", platformsName);
-    result = RegOpenKeyExA(
+    KHR_ICD_WIDE_TRACE(L"Opening key HKLM\\%ls...\n", platformsName);
+    result = RegOpenKeyExW(
         HKEY_LOCAL_MACHINE,
         platformsName,
         0,
@@ -228,14 +236,14 @@ BOOL CALLBACK khrIcdOsVendorsEnumerate(PINIT_ONCE InitOnce, PVOID Parameter, PVO
         &platformsKey);
     if (ERROR_SUCCESS != result)
     {
-        KHR_ICD_TRACE("Failed to open platforms key %s, continuing\n", platformsName);
+        KHR_ICD_WIDE_TRACE(L"Failed to open platforms key %ls, continuing\n", platformsName);
     }
     else
     {
         // for each value
         for (dwIndex = 0;; ++dwIndex)
         {
-            char cszLibraryName[1024] = {0};
+            WCHAR cszLibraryName[1024] = {0};
             DWORD dwLibraryNameSize = sizeof(cszLibraryName);
             DWORD dwLibraryNameType = 0;
             DWORD dwValue = 0;
@@ -243,7 +251,7 @@ BOOL CALLBACK khrIcdOsVendorsEnumerate(PINIT_ONCE InitOnce, PVOID Parameter, PVO
 
             // read the value name
             KHR_ICD_TRACE("Reading value %"PRIuDW"...\n", dwIndex);
-            result = RegEnumValueA(
+            result = RegEnumValueW(
                   platformsKey,
                   dwIndex,
                   cszLibraryName,
@@ -258,7 +266,7 @@ BOOL CALLBACK khrIcdOsVendorsEnumerate(PINIT_ONCE InitOnce, PVOID Parameter, PVO
                 KHR_ICD_TRACE("Failed to read value %"PRIuDW", done reading key.\n", dwIndex);
                 break;
             }
-            KHR_ICD_TRACE("Value %s found...\n", cszLibraryName);
+            KHR_ICD_WIDE_TRACE(L"Value %ls found...\n", cszLibraryName);
 
             // Require that the value be a DWORD and equal zero
             if (REG_DWORD != dwLibraryNameType)
@@ -277,7 +285,7 @@ BOOL CALLBACK khrIcdOsVendorsEnumerate(PINIT_ONCE InitOnce, PVOID Parameter, PVO
     }
 
     // Add adapters according to DXGI's preference order
-    HMODULE hDXGI = LoadLibraryA("dxgi.dll");
+    HMODULE hDXGI = LoadLibraryW(L"dxgi.dll");
     if (hDXGI)
     {
         IDXGIFactory* pFactory = NULL;
@@ -328,15 +336,15 @@ BOOL CALLBACK khrIcdOsVendorsEnumerate(PINIT_ONCE InitOnce, PVOID Parameter, PVO
     result = RegCloseKey(platformsKey);
     if (ERROR_SUCCESS != result)
     {
-        KHR_ICD_TRACE("Failed to close platforms key %s, ignoring\n", platformsName);
+        KHR_ICD_WIDE_TRACE(L"Failed to close platforms key %ls, ignoring\n", platformsName);
     }
 
 #if defined(CL_ENABLE_LAYERS)
-    const char* layersName = "SOFTWARE\\Khronos\\OpenCL\\Layers";
+    const WCHAR* layersName = L"SOFTWARE\\Khronos\\OpenCL\\Layers";
     HKEY layersKey = NULL;
 
-    KHR_ICD_TRACE("Opening key HKLM\\%s...\n", layersName);
-    result = RegOpenKeyExA(
+    KHR_ICD_WIDE_TRACE(L"Opening key HKLM\\%ls...\n", layersName);
+    result = RegOpenKeyExW(
         HKEY_LOCAL_MACHINE,
         layersName,
         0,
@@ -344,14 +352,14 @@ BOOL CALLBACK khrIcdOsVendorsEnumerate(PINIT_ONCE InitOnce, PVOID Parameter, PVO
         &layersKey);
     if (ERROR_SUCCESS != result)
     {
-        KHR_ICD_TRACE("Failed to open layers key %s, continuing\n", layersName);
+        KHR_ICD_WIDE_TRACE(L"Failed to open layers key %ls, continuing\n", layersName);
     }
     else
     {
         // for each value
         for (dwIndex = 0;; ++dwIndex)
         {
-            char cszLibraryName[1024] = {0};
+            WCHAR cszLibraryName[1024] = {0};
             DWORD dwLibraryNameSize = sizeof(cszLibraryName);
             DWORD dwLibraryNameType = 0;
             DWORD dwValue = 0;
@@ -359,7 +367,7 @@ BOOL CALLBACK khrIcdOsVendorsEnumerate(PINIT_ONCE InitOnce, PVOID Parameter, PVO
 
             // read the value name
             KHR_ICD_TRACE("Reading value %"PRIuDW"...\n", dwIndex);
-            result = RegEnumValueA(
+            result = RegEnumValueW(
                   layersKey,
                   dwIndex,
                   cszLibraryName,
@@ -374,7 +382,7 @@ BOOL CALLBACK khrIcdOsVendorsEnumerate(PINIT_ONCE InitOnce, PVOID Parameter, PVO
                 KHR_ICD_TRACE("Failed to read value %"PRIuDW", done reading key.\n", dwIndex);
                 break;
             }
-            KHR_ICD_TRACE("Value %s found...\n", cszLibraryName);
+            KHR_ICD_WIDE_TRACE(L"Value %ls found...\n", cszLibraryName);
 
             // Require that the value be a DWORD
             if (REG_DWORD != dwLibraryNameType)
@@ -418,12 +426,12 @@ void khrIcdOsVendorsEnumerateOnce()
  */
 
 // dynamically load a library.  returns NULL on failure
-void *khrIcdOsLibraryLoad(const char *libraryName)
+void *khrIcdOsLibraryLoad(const WCHAR *libraryName)
 {
-    HMODULE hTemp = LoadLibraryExA(libraryName, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    HMODULE hTemp = LoadLibraryExW(libraryName, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!hTemp && GetLastError() == ERROR_INVALID_PARAMETER)
     {
-        hTemp = LoadLibraryExA(libraryName, NULL, 0);
+        hTemp = LoadLibraryExW(libraryName, NULL, 0);
     }
     if (!hTemp)
     {
@@ -447,3 +455,299 @@ void khrIcdOsLibraryUnload(void *library)
 {
     FreeLibrary( (HMODULE)library);
 }
+
+void khrIcdVendorAdd(const WCHAR *libraryName)
+{
+    void *library = NULL;
+    cl_int result = CL_SUCCESS;
+    pfn_clGetExtensionFunctionAddress p_clGetExtensionFunctionAddress = NULL;
+    pfn_clIcdGetPlatformIDs p_clIcdGetPlatformIDs = NULL;
+    cl_uint i = 0;
+    cl_uint platformCount = 0;
+    cl_platform_id *platforms = NULL;
+    KHRicdVendor *vendorIterator = NULL;
+
+    // require that the library name be valid
+    if (!libraryName) 
+    {
+        goto Done;
+    }
+    KHR_ICD_WIDE_TRACE(L"attempting to add vendor %ls...\n", libraryName);
+
+    // load its library and query its function pointers
+    library = khrIcdOsLibraryLoad(libraryName);
+    if (!library)
+    {
+        KHR_ICD_WIDE_TRACE(L"failed to load library %ls\n", libraryName);
+        goto Done;
+    }
+
+    // ensure that we haven't already loaded this vendor
+    for (vendorIterator = khrIcdVendors; vendorIterator; vendorIterator = vendorIterator->next)
+    {
+        if (vendorIterator->library == library)
+        {
+            KHR_ICD_WIDE_TRACE(L"already loaded vendor %ls, nothing to do here\n", libraryName);
+            goto Done;
+        }
+    }
+
+    // get the library's clGetExtensionFunctionAddress pointer
+    p_clGetExtensionFunctionAddress = (pfn_clGetExtensionFunctionAddress)(size_t)khrIcdOsLibraryGetFunctionAddress(library, "clGetExtensionFunctionAddress");
+    if (!p_clGetExtensionFunctionAddress)
+    {
+        KHR_ICD_TRACE("failed to get function address clGetExtensionFunctionAddress\n");
+        goto Done;
+    }
+
+    // use that function to get the clIcdGetPlatformIDsKHR function pointer
+    p_clIcdGetPlatformIDs = (pfn_clIcdGetPlatformIDs)(size_t)p_clGetExtensionFunctionAddress("clIcdGetPlatformIDsKHR");
+    if (!p_clIcdGetPlatformIDs)
+    {
+        KHR_ICD_TRACE("failed to get extension function address clIcdGetPlatformIDsKHR\n");
+        goto Done;
+    }
+
+    // query the number of platforms available and allocate space to store them
+    result = p_clIcdGetPlatformIDs(0, NULL, &platformCount);
+    if (CL_SUCCESS != result)
+    {
+        KHR_ICD_TRACE("failed clIcdGetPlatformIDs\n");
+        goto Done;
+    }
+    platforms = (cl_platform_id *)malloc(platformCount * sizeof(cl_platform_id) );
+    if (!platforms)
+    {
+        KHR_ICD_TRACE("failed to allocate memory\n");
+        goto Done;
+    }
+    memset(platforms, 0, platformCount * sizeof(cl_platform_id) );
+    result = p_clIcdGetPlatformIDs(platformCount, platforms, NULL);
+    if (CL_SUCCESS != result)
+    {
+        KHR_ICD_TRACE("failed clIcdGetPlatformIDs\n");
+        goto Done;
+    }
+
+    // for each platform, add it
+    for (i = 0; i < platformCount; ++i)
+    {
+        KHRicdVendor* vendor = NULL;
+        char *suffix;
+        size_t suffixSize;
+
+        // call clGetPlatformInfo on the returned platform to get the suffix
+        if (!platforms[i])
+        {
+            continue;
+        }
+        result = platforms[i]->dispatch->clGetPlatformInfo(
+            platforms[i],
+            CL_PLATFORM_ICD_SUFFIX_KHR,
+            0,
+            NULL,
+            &suffixSize);
+        if (CL_SUCCESS != result)
+        {
+            continue;
+        }
+        suffix = (char *)malloc(suffixSize);
+        if (!suffix)
+        {
+            continue;
+        }
+        result = platforms[i]->dispatch->clGetPlatformInfo(
+            platforms[i],
+            CL_PLATFORM_ICD_SUFFIX_KHR,
+            suffixSize,
+            suffix,
+            NULL);            
+        if (CL_SUCCESS != result)
+        {
+            free(suffix);
+            continue;
+        }
+
+        // allocate a structure for the vendor
+        vendor = (KHRicdVendor*)malloc(sizeof(*vendor) );
+        if (!vendor) 
+        {
+            free(suffix);
+            KHR_ICD_TRACE("failed to allocate memory\n");
+            continue;
+        }
+        memset(vendor, 0, sizeof(*vendor) );
+
+        // populate vendor data
+        vendor->library = khrIcdOsLibraryLoad(libraryName);
+        if (!vendor->library) 
+        {
+            free(suffix);
+            free(vendor);
+            KHR_ICD_TRACE("failed get platform handle to library\n");
+            continue;
+        }
+        vendor->clGetExtensionFunctionAddress = p_clGetExtensionFunctionAddress;
+        vendor->platform = platforms[i];
+        vendor->suffix = suffix;
+
+        // add this vendor to the list of vendors at the tail
+        {
+            KHRicdVendor **prevNextPointer = NULL;
+            for (prevNextPointer = &khrIcdVendors; *prevNextPointer; prevNextPointer = &( (*prevNextPointer)->next) );
+            *prevNextPointer = vendor;
+        }
+
+        KHR_ICD_WIDE_TRACE(L"successfully added vendor %ls ", libraryName);
+        KHR_ICD_TRACE("with suffix %s\n", suffix);
+
+    }
+
+Done:
+
+    if (library)
+    {
+        khrIcdOsLibraryUnload(library);
+    }
+    if (platforms)
+    {
+        free(platforms);
+    }
+}
+
+#if defined(CL_ENABLE_LAYERS)
+void khrIcdLayerAdd(const WCHAR *libraryName)
+{
+    void *library = NULL;
+    cl_int result = CL_SUCCESS;
+    pfn_clGetLayerInfo p_clGetLayerInfo = NULL;
+    pfn_clInitLayer p_clInitLayer = NULL;
+    struct KHRLayer *layerIterator = NULL;
+    struct KHRLayer *layer = NULL;
+    cl_layer_api_version api_version = 0;
+    const struct _cl_icd_dispatch *targetDispatch = NULL;
+    const struct _cl_icd_dispatch *layerDispatch = NULL;
+    cl_uint layerDispatchNumEntries = 0;
+    cl_uint loaderDispatchNumEntries = 0;
+
+    // require that the library name be valid
+    if (!libraryName)
+    {
+        goto Done;
+    }
+    KHR_ICD_WIDE_TRACE(L"attempting to add layer %ls...\n", libraryName);
+
+    // load its library and query its function pointers
+    library = khrIcdOsLibraryLoad(libraryName);
+    if (!library)
+    {
+        KHR_ICD_WIDE_TRACE(L"failed to load library %ls\n", libraryName);
+        goto Done;
+    }
+
+    // ensure that we haven't already loaded this layer
+    for (layerIterator = khrFirstLayer; layerIterator; layerIterator = layerIterator->next)
+    {
+        if (layerIterator->library == library)
+        {
+            KHR_ICD_WIDE_TRACE(L"already loaded layer %ls, nothing to do here\n", libraryName);
+            goto Done;
+        }
+    }
+
+    // get the library's clGetLayerInfo pointer
+    p_clGetLayerInfo = (pfn_clGetLayerInfo)(size_t)khrIcdOsLibraryGetFunctionAddress(library, "clGetLayerInfo");
+    if (!p_clGetLayerInfo)
+    {
+        KHR_ICD_TRACE("failed to get function address clGetLayerInfo\n");
+        goto Done;
+    }
+
+    // use that function to get the clInitLayer function pointer
+    p_clInitLayer = (pfn_clInitLayer)(size_t)khrIcdOsLibraryGetFunctionAddress(library, "clInitLayer");
+    if (!p_clInitLayer)
+    {
+        KHR_ICD_TRACE("failed to get function address clInitLayer\n");
+        goto Done;
+    }
+
+    result = p_clGetLayerInfo(CL_LAYER_API_VERSION, sizeof(api_version), &api_version, NULL);
+    if (CL_SUCCESS != result)
+    {
+        KHR_ICD_TRACE("failed to query layer version\n");
+        goto Done;
+    }
+
+    if (CL_LAYER_API_VERSION_100 != api_version)
+    {
+        KHR_ICD_TRACE("unsupported api version\n");
+        goto Done;
+    }
+
+    layer = (struct KHRLayer*)calloc(sizeof(struct KHRLayer), 1);
+    if (!layer)
+    {
+        KHR_ICD_TRACE("failed to allocate memory\n");
+        goto Done;
+    }
+#ifdef CL_LAYER_INFO
+    {
+        // Not using strdup as it is not standard c
+        size_t sz_name = (wcslen(libraryName) + 1)*sizeof(libraryName[0]);
+        layer->libraryName = malloc(sz_name);
+        if (!layer->libraryName)
+        {
+            KHR_ICD_TRACE("failed to allocate memory\n");
+            goto Done;
+        }
+        memcpy(layer->libraryName, libraryName, sz_name);
+        layer->p_clGetLayerInfo = (void *)(size_t)p_clGetLayerInfo;
+    }
+#endif
+
+    if (khrFirstLayer) {
+        targetDispatch = &(khrFirstLayer->dispatch);
+    } else {
+        targetDispatch = &khrMasterDispatch;
+    }
+
+    loaderDispatchNumEntries = sizeof(khrMasterDispatch)/sizeof(void*);
+    result = p_clInitLayer(
+        loaderDispatchNumEntries,
+        targetDispatch,
+        &layerDispatchNumEntries,
+        &layerDispatch);
+    if (CL_SUCCESS != result)
+    {
+        KHR_ICD_TRACE("failed to initialize layer\n");
+        goto Done;
+    }
+
+    layer->next = khrFirstLayer;
+    khrFirstLayer = layer;
+    layer->library = library;
+
+    cl_uint limit = layerDispatchNumEntries < loaderDispatchNumEntries ? layerDispatchNumEntries : loaderDispatchNumEntries;
+
+    for (cl_uint i = 0; i < limit; i++) {
+        ((void **)&(layer->dispatch))[i] =
+            ((void *const*)layerDispatch)[i] ?
+                ((void *const*)layerDispatch)[i] : ((void *const*)targetDispatch)[i];
+    }
+    for (cl_uint i = limit; i < loaderDispatchNumEntries; i++) {
+        ((void **)&(layer->dispatch))[i] = ((void *const*)targetDispatch)[i];
+    }
+
+    KHR_ICD_WIDE_TRACE(L"successfully added layer %ls\n", libraryName);
+    return;
+Done:
+    if (library)
+    {
+        khrIcdOsLibraryUnload(library);
+    }
+    if (layer)
+    {
+        free(layer);
+    }
+}
+#endif // defined(CL_ENABLE_LAYERS)

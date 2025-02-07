@@ -20,21 +20,21 @@
 #include <stdbool.h>
 #include <windows.h>
 
-char *khrIcd_getenv(const char *name) {
-    char *retVal;
+static WCHAR *khrIcd_getenv(const WCHAR *name) {
+    WCHAR *retVal;
     DWORD valSize;
 
-    valSize = GetEnvironmentVariableA(name, NULL, 0);
+    valSize = GetEnvironmentVariableW(name, NULL, 0);
 
     // valSize DOES include the null terminator, so for any set variable
     // will always be at least 1. If it's 0, the variable wasn't set.
     if (valSize == 0) return NULL;
 
     // Allocate the space necessary for the registry entry
-    retVal = (char *)malloc(valSize);
+    retVal = (WCHAR *)malloc(sizeof(WCHAR)*valSize);
 
     if (NULL != retVal) {
-        GetEnvironmentVariableA(name, retVal, valSize);
+        GetEnvironmentVariableW(name, retVal, valSize);
     }
 
     return retVal;
@@ -64,7 +64,7 @@ static bool khrIcd_IsHighIntegrityLevel()
     return isHighIntegrityLevel;
 }
 
-char *khrIcd_secure_getenv(const char *name) {
+static WCHAR *khrIcd_secure_getenv(const WCHAR *name) {
     if (khrIcd_IsHighIntegrityLevel()) {
         KHR_ICD_TRACE("Running at a high integrity level, so secure_getenv is returning NULL\n");
         return NULL;
@@ -73,6 +73,88 @@ char *khrIcd_secure_getenv(const char *name) {
     return khrIcd_getenv(name);
 }
 
-void khrIcd_free_getenv(char *val) {
+static void khrIcd_free_getenv(WCHAR *val) {
     free((void *)val);
 }
+
+// entrypoint to check and initialize trace.
+void khrIcdInitializeTrace(void)
+{
+    WCHAR *enableTrace = khrIcd_getenv(L"OCL_ICD_ENABLE_TRACE");
+    if (enableTrace && (wcscmp(enableTrace, L"True") == 0 ||
+            wcscmp(enableTrace, L"true") == 0 ||
+            wcscmp(enableTrace, L"T") == 0 ||
+            wcscmp(enableTrace, L"1") == 0))
+    {
+        khrEnableTrace = 1;
+    }
+}
+
+// Get next file or dirname given a string list or registry key path.
+// Note: the input string may be modified!
+static WCHAR *loader_get_next_path(WCHAR *path) {
+    size_t len;
+    WCHAR *next;
+
+    if (path == NULL) return NULL;
+    next = wcschr(path, PATH_SEPARATOR);
+    if (next == NULL) {
+        len = wcslen(path);
+        next = path + len;
+    } else {
+        *next = L'\0';
+        next++;
+    }
+
+    return next;
+}
+
+// add a vendor's implementation to the list of libraries
+void khrIcdVendorAdd(const WCHAR *libraryName);
+
+void khrIcdVendorsEnumerateEnv(void)
+{
+    WCHAR* icdFilenames = khrIcd_secure_getenv(L"OCL_ICD_FILENAMES");
+    WCHAR* cur_file = NULL;
+    WCHAR* next_file = NULL;
+    if (icdFilenames)
+    {
+        KHR_ICD_TRACE("Found OCL_ICD_FILENAMES environment variable.\n");
+
+        next_file = icdFilenames;
+        while (NULL != next_file && *next_file != '\0') {
+            cur_file = next_file;
+            next_file = loader_get_next_path(cur_file);
+
+            khrIcdVendorAdd(cur_file);
+        }
+
+        khrIcd_free_getenv(icdFilenames);
+    }
+}
+
+// add a layer to the layer chain
+void khrIcdLayerAdd(const WCHAR *libraryName);
+
+#if defined(CL_ENABLE_LAYERS)
+void khrIcdLayersEnumerateEnv(void)
+{
+    WCHAR* layerFilenames = khrIcd_secure_getenv(L"OPENCL_LAYERS");
+    WCHAR* cur_file = NULL;
+    WCHAR* next_file = NULL;
+    if (layerFilenames)
+    {
+        KHR_ICD_TRACE("Found OPENCL_LAYERS environment variable.\n");
+
+        next_file = layerFilenames;
+        while (NULL != next_file && *next_file != '\0') {
+            cur_file = next_file;
+            next_file = loader_get_next_path(cur_file);
+
+            khrIcdLayerAdd(cur_file);
+        }
+
+        khrIcd_free_getenv(layerFilenames);
+    }
+}
+#endif // defined(CL_ENABLE_LAYERS)

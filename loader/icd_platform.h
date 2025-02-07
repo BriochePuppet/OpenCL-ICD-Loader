@@ -33,8 +33,8 @@
 
 #elif defined(_WIN32)
 
-#define PATH_SEPARATOR ';'
-#define DIRECTORY_SYMBOL '\\'
+#define PATH_SEPARATOR L';'
+#define DIRECTORY_SYMBOL L'\\'
 
 #else
 #error Unknown OS!

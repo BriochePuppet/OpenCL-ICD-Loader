@@ -17,215 +17,20 @@
  */
 
 #include "icd.h"
-#include "icd_envvars.h"
+#include "icd_dispatch.h"
+#include <CL/cl_layer.h>
 
 #include <dlfcn.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <sys/types.h>
-#include <sys/stat.h>
-#include <dirent.h>
 #include <pthread.h>
-#include <limits.h>
 
 static pthread_once_t initialized = PTHREAD_ONCE_INIT;
 
-/*
- *
- * Vendor enumeration functions
- *
- */
-
-typedef void khrIcdFileAdd(const char *);
-
-static inline void khrIcdOsDirEntryValidateAndAdd(const char *d_name, const char *path,
-                                                  const char *extension, khrIcdFileAdd addFunc)
-{
-    struct stat statBuff;
-    char* fileName = NULL;
-
-    // make sure the file name ends in `extension` (eg. .icd, or .lay)
-    if (strlen(extension) > strlen(d_name))
-    {
-        return;
-    }
-    if (strcmp(d_name + strlen(d_name) - strlen(extension), extension))
-    {
-        return;
-    }
-
-    // allocate space for the full path of the vendor library name
-    fileName = malloc(strlen(d_name) + strlen(path) + 2);
-    if (!fileName)
-    {
-        KHR_ICD_TRACE("Failed allocate space for ICD file path\n");
-        return;
-    }
-    sprintf(fileName, "%s/%s", path, d_name);
-
-    if (stat(fileName, &statBuff))
-    {
-        KHR_ICD_TRACE("Failed stat for: %s, continuing\n", fileName);
-        free(fileName);
-        return;
-    }
-
-    if (S_ISREG(statBuff.st_mode) || S_ISLNK(statBuff.st_mode))
-    {
-        FILE *fin = NULL;
-        char* buffer = NULL;
-        long bufferSize = 0;
-
-        // open the file and read its contents
-        fin = fopen(fileName, "r");
-        if (!fin)
-        {
-            free(fileName);
-            return;
-        }
-        fseek(fin, 0, SEEK_END);
-        bufferSize = ftell(fin);
-
-        buffer = malloc(bufferSize+1);
-        if (!buffer)
-        {
-            free(fileName);
-            fclose(fin);
-            return;
-        }
-        memset(buffer, 0, bufferSize+1);
-        fseek(fin, 0, SEEK_SET);
-        if (bufferSize != (long)fread(buffer, 1, bufferSize, fin))
-        {
-            free(fileName);
-            free(buffer);
-            fclose(fin);
-            return;
-        }
-        // ignore a newline at the end of the file
-        if (buffer[bufferSize-1] == '\n') buffer[bufferSize-1] = '\0';
-
-        // load the string read from the file
-        addFunc(buffer);
-
-        free(fileName);
-        free(buffer);
-        fclose(fin);
-     }
-     else
-     {
-         KHR_ICD_TRACE("File %s is not a regular file nor symbolic link, continuing\n", fileName);
-         free(fileName);
-     }
-}
-
-struct dirElem
-{
-    char *d_name;
-    unsigned char d_type;
-};
-
-static int compareDirElem(const void *a, const void *b)
-{
-    // sort files the same way libc alpahnumerically sorts directory entries.
-    return strcoll(((const struct dirElem *)a)->d_name, ((const struct dirElem *)b)->d_name);
-}
-
-static inline void khrIcdOsDirEnumerate(const char *path, const char *env,
-                                        const char *extension,
-                                        khrIcdFileAdd addFunc, int bSort)
-{
-    DIR *dir = NULL;
-    char* envPath = NULL;
-
-    envPath = khrIcd_secure_getenv(env);
-    if (NULL != envPath)
-    {
-        path = envPath;
-    }
-
-    dir = opendir(path);
-    if (NULL == dir) 
-    {
-        KHR_ICD_TRACE("Failed to open path %s, continuing\n", path);
-    }
-    else
-    {
-        struct dirent *dirEntry = NULL;
-
-        // attempt to load all files in the directory
-        if (bSort) {
-            // store the entries name and type in a buffer for sorting
-            size_t sz = 0;
-            size_t elemCount = 0;
-            size_t elemAlloc = 0;
-            struct dirElem *dirElems = NULL;
-            struct dirElem *newDirElems = NULL;
-            const size_t startupAlloc = 8;
-
-            // start with a small buffer
-            dirElems = (struct dirElem *)malloc(startupAlloc*sizeof(struct dirElem));
-            if (NULL != dirElems) {
-                elemAlloc = startupAlloc;
-                for (dirEntry = readdir(dir); dirEntry; dirEntry = readdir(dir) ) {
-                    char *nameCopy = NULL;
-
-                    if (elemCount + 1 > elemAlloc) {
-                        // double buffer size if necessary and possible
-                        if (elemAlloc >= UINT_MAX/2)
-                            break;
-                        newDirElems = (struct dirElem *)realloc(dirElems, elemAlloc*2*sizeof(struct dirElem));
-                        if (NULL == newDirElems)
-                            break;
-                        dirElems = newDirElems;
-                        elemAlloc *= 2;
-                    }
-                    sz = strlen(dirEntry->d_name) + 1;
-                    nameCopy = (char *)malloc(sz);
-                    if (NULL == nameCopy)
-                         break;
-                    memcpy(nameCopy, dirEntry->d_name, sz);
-                    dirElems[elemCount].d_name = nameCopy;
-                    dirElems[elemCount].d_type = dirEntry->d_type;
-                    elemCount++;
-                }
-                qsort(dirElems, elemCount, sizeof(struct dirElem), compareDirElem);
-                for (struct dirElem *elem = dirElems; elem < dirElems + elemCount; ++elem) {
-                    khrIcdOsDirEntryValidateAndAdd(elem->d_name, path, extension, addFunc);
-                    free(elem->d_name);
-                }
-                free(dirElems);
-            }
-        } else
-            // use system provided ordering
-            for (dirEntry = readdir(dir); dirEntry; dirEntry = readdir(dir) )
-                khrIcdOsDirEntryValidateAndAdd(dirEntry->d_name, path, extension, addFunc);
-
-        closedir(dir);
-    }
-
-    if (NULL != envPath)
-    {
-        khrIcd_free_getenv(envPath);
-    }
-}
-
 // go through the list of vendors in the two configuration files
-void khrIcdOsVendorsEnumerate(void)
-{
-    khrIcdInitializeTrace();
-    khrIcdVendorsEnumerateEnv();
-
-    khrIcdOsDirEnumerate(ICD_VENDOR_PATH, "OCL_ICD_VENDORS", ".icd", khrIcdVendorAdd, 0);
-
-#if defined(CL_ENABLE_LAYERS)
-    // system layers should be closer to the driver
-    khrIcdOsDirEnumerate(LAYER_PATH, "OPENCL_LAYER_PATH", ".lay", khrIcdLayerAdd, 1);
-
-    khrIcdLayersEnumerateEnv();
-#endif // defined(CL_ENABLE_LAYERS)
-}
+void khrIcdOsVendorsEnumerate(void);
 
 // go through the list of vendors only once
 void khrIcdOsVendorsEnumerateOnce(void)
@@ -261,3 +66,298 @@ void khrIcdOsLibraryUnload(void *library)
 {
     dlclose(library);
 }
+
+void khrIcdVendorAdd(const char *libraryName)
+{
+    void *library = NULL;
+    cl_int result = CL_SUCCESS;
+    pfn_clGetExtensionFunctionAddress p_clGetExtensionFunctionAddress = NULL;
+    pfn_clIcdGetPlatformIDs p_clIcdGetPlatformIDs = NULL;
+    cl_uint i = 0;
+    cl_uint platformCount = 0;
+    cl_platform_id *platforms = NULL;
+    KHRicdVendor *vendorIterator = NULL;
+
+    // require that the library name be valid
+    if (!libraryName) 
+    {
+        goto Done;
+    }
+    KHR_ICD_TRACE("attempting to add vendor %s...\n", libraryName);
+
+    // load its library and query its function pointers
+    library = khrIcdOsLibraryLoad(libraryName);
+    if (!library)
+    {
+        KHR_ICD_TRACE("failed to load library %s\n", libraryName);
+        goto Done;
+    }
+
+    // ensure that we haven't already loaded this vendor
+    for (vendorIterator = khrIcdVendors; vendorIterator; vendorIterator = vendorIterator->next)
+    {
+        if (vendorIterator->library == library)
+        {
+            KHR_ICD_TRACE("already loaded vendor %s, nothing to do here\n", libraryName);
+            goto Done;
+        }
+    }
+
+    // get the library's clGetExtensionFunctionAddress pointer
+    p_clGetExtensionFunctionAddress = (pfn_clGetExtensionFunctionAddress)(size_t)khrIcdOsLibraryGetFunctionAddress(library, "clGetExtensionFunctionAddress");
+    if (!p_clGetExtensionFunctionAddress)
+    {
+        KHR_ICD_TRACE("failed to get function address clGetExtensionFunctionAddress\n");
+        goto Done;
+    }
+
+    // use that function to get the clIcdGetPlatformIDsKHR function pointer
+    p_clIcdGetPlatformIDs = (pfn_clIcdGetPlatformIDs)(size_t)p_clGetExtensionFunctionAddress("clIcdGetPlatformIDsKHR");
+    if (!p_clIcdGetPlatformIDs)
+    {
+        KHR_ICD_TRACE("failed to get extension function address clIcdGetPlatformIDsKHR\n");
+        goto Done;
+    }
+
+    // query the number of platforms available and allocate space to store them
+    result = p_clIcdGetPlatformIDs(0, NULL, &platformCount);
+    if (CL_SUCCESS != result)
+    {
+        KHR_ICD_TRACE("failed clIcdGetPlatformIDs\n");
+        goto Done;
+    }
+    platforms = (cl_platform_id *)malloc(platformCount * sizeof(cl_platform_id) );
+    if (!platforms)
+    {
+        KHR_ICD_TRACE("failed to allocate memory\n");
+        goto Done;
+    }
+    memset(platforms, 0, platformCount * sizeof(cl_platform_id) );
+    result = p_clIcdGetPlatformIDs(platformCount, platforms, NULL);
+    if (CL_SUCCESS != result)
+    {
+        KHR_ICD_TRACE("failed clIcdGetPlatformIDs\n");
+        goto Done;
+    }
+
+    // for each platform, add it
+    for (i = 0; i < platformCount; ++i)
+    {
+        KHRicdVendor* vendor = NULL;
+        char *suffix;
+        size_t suffixSize;
+
+        // call clGetPlatformInfo on the returned platform to get the suffix
+        if (!platforms[i])
+        {
+            continue;
+        }
+        result = platforms[i]->dispatch->clGetPlatformInfo(
+            platforms[i],
+            CL_PLATFORM_ICD_SUFFIX_KHR,
+            0,
+            NULL,
+            &suffixSize);
+        if (CL_SUCCESS != result)
+        {
+            continue;
+        }
+        suffix = (char *)malloc(suffixSize);
+        if (!suffix)
+        {
+            continue;
+        }
+        result = platforms[i]->dispatch->clGetPlatformInfo(
+            platforms[i],
+            CL_PLATFORM_ICD_SUFFIX_KHR,
+            suffixSize,
+            suffix,
+            NULL);            
+        if (CL_SUCCESS != result)
+        {
+            free(suffix);
+            continue;
+        }
+
+        // allocate a structure for the vendor
+        vendor = (KHRicdVendor*)malloc(sizeof(*vendor) );
+        if (!vendor) 
+        {
+            free(suffix);
+            KHR_ICD_TRACE("failed to allocate memory\n");
+            continue;
+        }
+        memset(vendor, 0, sizeof(*vendor) );
+
+        // populate vendor data
+        vendor->library = khrIcdOsLibraryLoad(libraryName);
+        if (!vendor->library) 
+        {
+            free(suffix);
+            free(vendor);
+            KHR_ICD_TRACE("failed get platform handle to library\n");
+            continue;
+        }
+        vendor->clGetExtensionFunctionAddress = p_clGetExtensionFunctionAddress;
+        vendor->platform = platforms[i];
+        vendor->suffix = suffix;
+
+        // add this vendor to the list of vendors at the tail
+        {
+            KHRicdVendor **prevNextPointer = NULL;
+            for (prevNextPointer = &khrIcdVendors; *prevNextPointer; prevNextPointer = &( (*prevNextPointer)->next) );
+            *prevNextPointer = vendor;
+        }
+
+        KHR_ICD_TRACE("successfully added vendor %s with suffix %s\n", libraryName, suffix);
+
+    }
+
+Done:
+
+    if (library)
+    {
+        khrIcdOsLibraryUnload(library);
+    }
+    if (platforms)
+    {
+        free(platforms);
+    }
+}
+
+#if defined(CL_ENABLE_LAYERS)
+void khrIcdLayerAdd(const char *libraryName)
+{
+    void *library = NULL;
+    cl_int result = CL_SUCCESS;
+    pfn_clGetLayerInfo p_clGetLayerInfo = NULL;
+    pfn_clInitLayer p_clInitLayer = NULL;
+    struct KHRLayer *layerIterator = NULL;
+    struct KHRLayer *layer = NULL;
+    cl_layer_api_version api_version = 0;
+    const struct _cl_icd_dispatch *targetDispatch = NULL;
+    const struct _cl_icd_dispatch *layerDispatch = NULL;
+    cl_uint layerDispatchNumEntries = 0;
+    cl_uint loaderDispatchNumEntries = 0;
+
+    // require that the library name be valid
+    if (!libraryName)
+    {
+        goto Done;
+    }
+    KHR_ICD_TRACE("attempting to add layer %s...\n", libraryName);
+
+    // load its library and query its function pointers
+    library = khrIcdOsLibraryLoad(libraryName);
+    if (!library)
+    {
+        KHR_ICD_TRACE("failed to load library %s\n", libraryName);
+        goto Done;
+    }
+
+    // ensure that we haven't already loaded this layer
+    for (layerIterator = khrFirstLayer; layerIterator; layerIterator = layerIterator->next)
+    {
+        if (layerIterator->library == library)
+        {
+            KHR_ICD_TRACE("already loaded layer %s, nothing to do here\n", libraryName);
+            goto Done;
+        }
+    }
+
+    // get the library's clGetLayerInfo pointer
+    p_clGetLayerInfo = (pfn_clGetLayerInfo)(size_t)khrIcdOsLibraryGetFunctionAddress(library, "clGetLayerInfo");
+    if (!p_clGetLayerInfo)
+    {
+        KHR_ICD_TRACE("failed to get function address clGetLayerInfo\n");
+        goto Done;
+    }
+
+    // use that function to get the clInitLayer function pointer
+    p_clInitLayer = (pfn_clInitLayer)(size_t)khrIcdOsLibraryGetFunctionAddress(library, "clInitLayer");
+    if (!p_clInitLayer)
+    {
+        KHR_ICD_TRACE("failed to get function address clInitLayer\n");
+        goto Done;
+    }
+
+    result = p_clGetLayerInfo(CL_LAYER_API_VERSION, sizeof(api_version), &api_version, NULL);
+    if (CL_SUCCESS != result)
+    {
+        KHR_ICD_TRACE("failed to query layer version\n");
+        goto Done;
+    }
+
+    if (CL_LAYER_API_VERSION_100 != api_version)
+    {
+        KHR_ICD_TRACE("unsupported api version\n");
+        goto Done;
+    }
+
+    layer = (struct KHRLayer*)calloc(sizeof(struct KHRLayer), 1);
+    if (!layer)
+    {
+        KHR_ICD_TRACE("failed to allocate memory\n");
+        goto Done;
+    }
+#ifdef CL_LAYER_INFO
+    {
+        // Not using strdup as it is not standard c
+        size_t sz_name = strlen(libraryName) + 1;
+        layer->libraryName = malloc(sz_name);
+        if (!layer->libraryName)
+        {
+            KHR_ICD_TRACE("failed to allocate memory\n");
+            goto Done;
+        }
+        memcpy(layer->libraryName, libraryName, sz_name);
+        layer->p_clGetLayerInfo = (void *)(size_t)p_clGetLayerInfo;
+    }
+#endif
+
+    if (khrFirstLayer) {
+        targetDispatch = &(khrFirstLayer->dispatch);
+    } else {
+        targetDispatch = &khrMasterDispatch;
+    }
+
+    loaderDispatchNumEntries = sizeof(khrMasterDispatch)/sizeof(void*);
+    result = p_clInitLayer(
+        loaderDispatchNumEntries,
+        targetDispatch,
+        &layerDispatchNumEntries,
+        &layerDispatch);
+    if (CL_SUCCESS != result)
+    {
+        KHR_ICD_TRACE("failed to initialize layer\n");
+        goto Done;
+    }
+
+    layer->next = khrFirstLayer;
+    khrFirstLayer = layer;
+    layer->library = library;
+
+    cl_uint limit = layerDispatchNumEntries < loaderDispatchNumEntries ? layerDispatchNumEntries : loaderDispatchNumEntries;
+
+    for (cl_uint i = 0; i < limit; i++) {
+        ((void **)&(layer->dispatch))[i] =
+            ((void *const*)layerDispatch)[i] ?
+                ((void *const*)layerDispatch)[i] : ((void *const*)targetDispatch)[i];
+    }
+    for (cl_uint i = limit; i < loaderDispatchNumEntries; i++) {
+        ((void **)&(layer->dispatch))[i] = ((void *const*)targetDispatch)[i];
+    }
+
+    KHR_ICD_TRACE("successfully added layer %s\n", libraryName);
+    return;
+Done:
+    if (library)
+    {
+        khrIcdOsLibraryUnload(library);
+    }
+    if (layer)
+    {
+        free(layer);
+    }
+}
+#endif // defined(CL_ENABLE_LAYERS)
